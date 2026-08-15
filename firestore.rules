@@ -1,0 +1,60 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isSignedIn() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // ---- users: everyone owns exactly one profile document ----
+    match /users/{userId} {
+      allow get: if isOwner(userId) || isAdmin();
+      allow list: if isAdmin();
+
+      // Sign-up creates the caller's own profile, always as a plain user.
+      allow create: if isOwner(userId) && request.resource.data.role == 'user';
+
+      // A user may edit their own profile but never change their own role.
+      allow update: if (isOwner(userId) && request.resource.data.role == resource.data.role)
+                    || isAdmin();
+
+      allow delete: if isAdmin();
+    }
+
+    // ---- price_rates: public price list, admin-managed ----
+    match /price_rates/{rateId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // ---- products: public shop catalogue, admin-managed ----
+    match /products/{productId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // ---- pickup_requests: a store sees only its own requests ----
+    match /pickup_requests/{requestId} {
+      allow read: if isSignedIn() &&
+                     (resource.data.user_id == request.auth.uid || isAdmin());
+
+      // A store may only file a request under its own uid, always as pending.
+      allow create: if isSignedIn() &&
+                       request.resource.data.user_id == request.auth.uid &&
+                       request.resource.data.status == 'pending';
+
+      // Only staff confirm weights, payouts, and status.
+      allow update, delete: if isAdmin();
+    }
+  }
+}
